@@ -95,17 +95,30 @@ class ObstacleDetector:
 
     @staticmethod
     def _map_severity(confidence: float, class_name: str) -> SeverityLevel:
-        """Maps detection confidence and class name to a standardized SeverityLevel."""
-        critical_classes = {"person", "human", "vehicle", "car", "truck", "train", "boulder", "fallen_tree"}
-        name_lower = class_name.lower()
+        """Map detection confidence and object class to severity."""
+        name_lower = class_name.lower().strip()
 
-        if any(c in name_lower for c in critical_classes) and confidence >= 0.60:
+        critical_classes = {
+            "person",
+            "human",
+            "vehicle",
+            "car",
+            "truck",
+            "motorcycle",
+            "bicycle",
+            "fallen_tree",
+            "boulder",
+        }
+
+        if name_lower in critical_classes and confidence >= 0.60:
             return SeverityLevel.CRITICAL
 
         if confidence >= 0.80:
             return SeverityLevel.HIGH
-        elif confidence >= 0.50:
+
+        if confidence >= 0.50:
             return SeverityLevel.MEDIUM
+
         return SeverityLevel.LOW
 
     def detect(
