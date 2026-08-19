@@ -1,4 +1,4 @@
-"""Defect detection and video processing foundation."""
+"""Defect detection, hazard filtering, and vision processing modules."""
 
 from ai_pipeline.detection.video_reader import VideoReader, VideoMetadata
 from ai_pipeline.detection.frame_extractor import (
@@ -23,9 +23,18 @@ from ai_pipeline.detection.feasibility_analyzer import (
     DetectabilityRating,
     VisibilityLevel,
 )
+from ai_pipeline.detection.hazard_filter import (
+    TrackHazardFilter,
+    EgoTrackCorridorConfig,
+)
 from ai_pipeline.detection.obstacle_detector import (
     ObstacleDetector,
     ObstacleDetectorConfig,
+)
+from ai_pipeline.detection.vegetation_detector import (
+    VegetationDetector,
+    VegetationDetectorConfig,
+    VegetationAnalysisDetails,
 )
 from ai_pipeline.detection.vision_pipeline import VisionPipeline
 
@@ -46,7 +55,12 @@ __all__ = [
     "InspectionTargetAssessment",
     "DetectabilityRating",
     "VisibilityLevel",
+    "TrackHazardFilter",
+    "EgoTrackCorridorConfig",
     "ObstacleDetector",
     "ObstacleDetectorConfig",
+    "VegetationDetector",
+    "VegetationDetectorConfig",
+    "VegetationAnalysisDetails",
     "VisionPipeline",
 ]
