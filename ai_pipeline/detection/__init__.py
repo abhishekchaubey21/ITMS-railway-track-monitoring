@@ -11,6 +11,11 @@ from ai_pipeline.detection.frame_inspector import (
     InspectionReport,
     FrameQualityMetrics,
 )
+from ai_pipeline.detection.track_roi import (
+    TrackROIExtractor,
+    TrackROIConfig,
+    ROICropMetadata,
+)
 
 __all__ = [
     "VideoReader",
@@ -21,4 +26,7 @@ __all__ = [
     "FrameInspector",
     "InspectionReport",
     "FrameQualityMetrics",
+    "TrackROIExtractor",
+    "TrackROIConfig",
+    "ROICropMetadata",
 ]
