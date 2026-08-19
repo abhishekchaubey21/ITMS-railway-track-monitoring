@@ -6,6 +6,11 @@ from ai_pipeline.detection.frame_extractor import (
     ExtractionSummary,
     FrameInfo,
 )
+from ai_pipeline.detection.frame_inspector import (
+    FrameInspector,
+    InspectionReport,
+    FrameQualityMetrics,
+)
 
 __all__ = [
     "VideoReader",
@@ -13,4 +18,7 @@ __all__ = [
     "FrameExtractor",
     "ExtractionSummary",
     "FrameInfo",
+    "FrameInspector",
+    "InspectionReport",
+    "FrameQualityMetrics",
 ]
