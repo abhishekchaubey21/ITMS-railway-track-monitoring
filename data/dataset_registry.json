@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0.0",
+  "last_updated": "2026-08-19",
+  "project": "ITMS - Indigenous Contactless Integrated Track Monitoring System",
+  "primary_video_source": {
+    "name": "Indian Railways Front-Facing Train POV",
+    "local_path": "data/raw/train_pov.mp4",
+    "modality": "RGB Video (1080p, 30 FPS)",
+    "viewpoint": "Cab-mounted forward-facing train POV",
+    "duration_seconds": 184.33,
+    "total_frames": 5530,
+    "extracted_frames_path": "data/processed/frames",
+    "status": "Active / Primary Baseline",
+    "license": "Project Demonstration Reference"
+  },
+  "candidate_datasets": [
+    {
+      "id": "railsem19",
+      "name": "RailSem19",
+      "source_url": "https://wilddash.cc/railsem19",
+      "paper_title": "RailSem19: A Dataset for Semantic Rail Scene Understanding (CVPRW 2019)",
+      "license": "CC BY-NC-SA 4.0",
+      "academic_hackathon_usable": true,
+      "modality": "8,500 Full HD Images",
+      "viewpoint": "Train / Tram Forward Cab POV",
+      "defect_or_object_classes": [
+        "rails",
+        "track_bed",
+        "switches",
+        "signals",
+        "trains",
+        "buffer_stops"
+      ],
+      "approximate_size": "8,500 images (~12 GB)",
+      "annotation_format": "Polygons / Dense Semantics / Polylines",
+      "relevance_score": 0.95,
+      "itms_capability_mapping": [
+        "Track/rail perception and visual geometry indicators",
+        "Active track corridor polygon masking"
+      ],
+      "download_status": "Deferred (Metadata Registered Only)"
+    },
+    {
+      "id": "rail_obstacle_roboflow",
+      "name": "Rail Track Obstacle Dataset (Roboflow)",
+      "source_url": "https://universe.roboflow.com/rail-obstacle-detection/dataset-for-detecting-obstacles-on-railways",
+      "paper_title": "Dataset for Detecting Obstacles on Railways",
+      "license": "CC BY 4.0 / Public Domain",
+      "academic_hackathon_usable": true,
+      "modality": "RGB Images (700+ annotated)",
+      "viewpoint": "Front-facing track corridor and level crossings",
+      "defect_or_object_classes": [
+        "fallen_tree",
+        "rock_debris",
+        "animal",
+        "human_trespasser",
+        "vehicle_on_track",
+        "track_obstruction"
+      ],
+      "approximate_size": "~700 images (~350 MB)",
+      "annotation_format": "YOLO Bounding Boxes (txt) / COCO JSON",
+      "relevance_score": 0.90,
+      "itms_capability_mapping": [
+        "Foreign object / track obstruction detection"
+      ],
+      "download_status": "Deferred (Metadata Registered Only)"
+    },
+    {
+      "id": "osdar23",
+      "name": "OSDaR23 (Open Sensor Data for Rail 2023)",
+      "source_url": "https://fid-move.de/data-sets/osdar23",
+      "paper_title": "OSDaR23: Open Sensor Data for Rail 2023 (ArXiv 2023)",
+      "license": "CC BY-SA 4.0",
+      "academic_hackathon_usable": true,
+      "modality": "Multi-Sensor (IMU, GNSS, LiDAR, Infrared, RGB)",
+      "viewpoint": "Track-Recording Railway Vehicle",
+      "defect_or_object_classes": [
+        "synchronized_imu_acceleration",
+        "gnss_coordinates",
+        "lidar_point_cloud",
+        "track_corridor"
+      ],
+      "approximate_size": "Multi-sensor time-series logs",
+      "annotation_format": "CSV / ROSBag / JSON timestamps",
+      "relevance_score": 0.92,
+      "itms_capability_mapping": [
+        "IMU vibration telemetry replay",
+        "GPS location / chainage replay",
+        "Multimodal fusion baseline schema"
+      ],
+      "download_status": "Deferred (Schema Reference Only)"
+    },
+    {
+      "id": "rfdd_fasteners",
+      "name": "Railway Fastener Defect Dataset (RFDD)",
+      "source_url": "https://universe.roboflow.com/railway-defects-osolv/fastener-detection-7a3vn",
+      "paper_title": "Railway Fastener Defect Detection (RFD-DETR / Benchmark)",
+      "license": "CC BY 4.0",
+      "academic_hackathon_usable": true,
+      "modality": "RGB Close-up Images",
+      "viewpoint": "Near-track / downward angle",
+      "defect_or_object_classes": [
+        "good_fastener",
+        "missing_fastener",
+        "defective_clip"
+      ],
+      "approximate_size": "~500 images (~200 MB)",
+      "annotation_format": "YOLO Bounding Boxes",
+      "relevance_score": 0.65,
+      "itms_capability_mapping": [
+        "Near-field missing fastener detection (Secondary)"
+      ],
+      "download_status": "Deferred (Secondary Target)"
+    },
+    {
+      "id": "rsdds_surface",
+      "name": "RSDDs (Rail Surface Defect Datasets - Type I & II)",
+      "source_url": "https://github.com/neu-rail-rsdds/rsdds",
+      "paper_title": "A High-Speed Railway Rail Surface Defect Dataset (NEU-Rail)",
+      "license": "Open Academic Research",
+      "academic_hackathon_usable": true,
+      "modality": "Grayscale Crops (195 images)",
+      "viewpoint": "Nadir / Downward Bogie-Mounted Camera",
+      "defect_or_object_classes": [
+        "rail_crack",
+        "spalling",
+        "squats",
+        "surface_burns"
+      ],
+      "approximate_size": "195 high-res crops (~50 MB)",
+      "annotation_format": "Defect Ground Truth Masks (PNG)",
+      "relevance_score": 0.50,
+      "itms_capability_mapping": [
+        "Rail surface anomaly reference / simulated signal baseline"
+      ],
+      "download_status": "Deferred (Secondary / Sensor Simulation Reference)"
+    }
+  ]
+}
