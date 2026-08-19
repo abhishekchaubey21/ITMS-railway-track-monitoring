@@ -159,6 +159,35 @@ def test_roi_restriction_behavior():
     assert assessment_track.score > 0.0
 
 
+def test_vegetation_beside_adjacent_track_is_not_ego_intrusion():
+    """Vegetation on side embankment or adjacent track produces score but NOT ego-track intrusion."""
+    detector = VegetationDetector()
+
+    img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+
+    # Place green vegetation patch exclusively on far-left side embankment / adjacent track (X: 180-320, Y: 600-800)
+    # This is inside ROI (X: 154-1766, Y: 486-1058), but OUTSIDE the ego corridor (X: ~600-1320 at Y: 600-800)
+    img[600:800, 180:320] = [30, 180, 40]
+
+    details = detector.analyze(img)
+    assert details.score > 0.0  # Overall vegetation score is captured
+    assert details.intrusion_detected is False  # But NOT on the train's own running rails
+
+
+def test_vegetation_genuinely_inside_ego_track_corridor_is_intrusion():
+    """Vegetation growing directly inside the ego-track corridor flags an intrusion."""
+    detector = VegetationDetector()
+
+    img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+
+    # Place green vegetation patch directly inside ego track running gauge (X: 900-1020, Y: 700-850)
+    img[700:850, 900:1020] = [30, 180, 40]
+
+    details = detector.analyze(img)
+    assert details.score > 0.0
+    assert details.intrusion_detected is True
+
+
 def test_detector_interfaces_and_polymorphism():
     """Verify analyze(), assess(), detect(), and __call__() all return consistent outputs."""
     detector = VegetationDetector()

@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import cv2
 import numpy as np
 
+from ai_pipeline.detection.hazard_filter import TrackHazardFilter, EgoTrackCorridorConfig
 from ai_pipeline.detection.track_roi import TrackROIExtractor
 from ai_pipeline.models.vision_events import VegetationAssessment
 
@@ -29,8 +30,8 @@ class VegetationDetectorConfig:
     morph_kernel_size: int = 3
     min_contour_area: int = 30
     score_multiplier: float = 5.0
-    intrusion_density_threshold: float = 0.015
-    center_corridor_ratio: Tuple[float, float] = (0.25, 0.75)
+    intrusion_density_threshold: float = 0.02
+    center_corridor_ratio: Tuple[float, float] = (0.32, 0.68)
 
 
 @dataclass
@@ -55,15 +56,18 @@ class VegetationDetector:
         self,
         config: Optional[VegetationDetectorConfig] = None,
         roi_extractor: Optional[TrackROIExtractor] = None,
+        hazard_filter: Optional[TrackHazardFilter] = None,
     ) -> None:
         """Initialize the VegetationDetector.
 
         Args:
             config: Detection thresholds and morphological parameters.
             roi_extractor: Pre-configured TrackROIExtractor instance.
+            hazard_filter: Optional TrackHazardFilter to establish ego-track perspective corridor.
         """
         self.config = config or VegetationDetectorConfig()
         self.roi_extractor = roi_extractor or TrackROIExtractor()
+        self.hazard_filter = hazard_filter or TrackHazardFilter()
 
     def _compute_exg_mask(self, bgr_image: np.ndarray) -> np.ndarray:
         """Compute binary mask where Excess Green index indicates vegetation."""
@@ -120,6 +124,40 @@ class VegetationDetector:
 
         return closed
 
+    def _build_ego_corridor_mask(
+        self,
+        roi_shape: Tuple[int, int],
+        image_shape: Tuple[int, int],
+        roi_bounds: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Constructs a binary mask representing the ego-track corridor within the ROI crop."""
+        rh, rw = roi_shape
+        h, w = image_shape
+        ymin, ymax, xmin, xmax = roi_bounds
+
+        corridor_mask = np.zeros((rh, rw), dtype=np.uint8)
+
+        if self.hazard_filter is not None:
+            # Generate trapezoidal perspective polygon in ROI coordinate space
+            top_left_x, top_right_x = self.hazard_filter.get_corridor_bounds_at_y(ymin, w, h)
+            bot_left_x, bot_right_x = self.hazard_filter.get_corridor_bounds_at_y(ymax, w, h)
+
+            pts = np.array([
+                [int(round(top_left_x - xmin)), 0],
+                [int(round(top_right_x - xmin)), 0],
+                [int(round(bot_right_x - xmin)), rh],
+                [int(round(bot_left_x - xmin)), rh],
+            ], dtype=np.int32)
+
+            cv2.fillPoly(corridor_mask, [pts], 255)
+        else:
+            # Fallback to configured center ratio
+            cx_min = int(rw * self.config.center_corridor_ratio[0])
+            cx_max = int(rw * self.config.center_corridor_ratio[1])
+            corridor_mask[:, cx_min:cx_max] = 255
+
+        return corridor_mask
+
     def analyze(
         self,
         image: np.ndarray,
@@ -147,8 +185,16 @@ class VegetationDetector:
         if timestamp < 0.0:
             raise ValueError(f"timestamp must be non-negative, got {timestamp}")
 
+        h, w = image.shape[:2]
+
         # 1. Extract Track Bed ROI
-        roi_crop = self.roi_extractor.crop(image) if self.roi_extractor else image
+        if self.roi_extractor:
+            roi_crop = self.roi_extractor.crop(image)
+            ymin, ymax, xmin, xmax = self.roi_extractor.get_pixel_bounds(h, w)
+        else:
+            roi_crop = image
+            ymin, ymax, xmin, xmax = 0, h, 0, w
+
         rh, rw = roi_crop.shape[:2]
         roi_pixels = rh * rw
 
@@ -174,23 +220,29 @@ class VegetationDetector:
         # 3. Morphological filtering
         clean_mask = self._apply_morphology(combined_mask)
 
-        # 4. Compute overall vegetation density & score
+        # 4. Compute overall vegetation density & score across track bed
         veg_pixels = int(np.count_nonzero(clean_mask))
         raw_density = veg_pixels / float(roi_pixels)
         scaled_score = min(1.0, max(0.0, raw_density * self.config.score_multiplier))
 
-        # 5. Compute central track corridor intrusion
-        cx_min = int(rw * self.config.center_corridor_ratio[0])
-        cx_max = int(rw * self.config.center_corridor_ratio[1])
-        center_mask_slice = clean_mask[:, cx_min:cx_max]
-        center_roi_pixels = rh * max(1, (cx_max - cx_min))
-        center_veg_pixels = int(np.count_nonzero(center_mask_slice))
-        center_density = center_veg_pixels / float(center_roi_pixels)
-
-        intrusion_detected = (
-            center_density >= self.config.intrusion_density_threshold
-            or scaled_score >= 0.50
+        # 5. Compute ego-track corridor encroachment
+        ego_corridor_mask = self._build_ego_corridor_mask(
+            roi_shape=(rh, rw),
+            image_shape=(h, w),
+            roi_bounds=(ymin, ymax, xmin, xmax),
         )
+
+        ego_veg_mask = cv2.bitwise_and(clean_mask, ego_corridor_mask)
+        center_veg_pixels = int(np.count_nonzero(ego_veg_mask))
+        center_roi_pixels = int(np.count_nonzero(ego_corridor_mask))
+
+        if center_roi_pixels > 0:
+            center_density = center_veg_pixels / float(center_roi_pixels)
+        else:
+            center_density = 0.0
+
+        # Intrusion is triggered strictly if vegetation encroaches into the active ego-track corridor
+        intrusion_detected = center_density >= self.config.intrusion_density_threshold
 
         return VegetationAnalysisDetails(
             score=round(scaled_score, 4),

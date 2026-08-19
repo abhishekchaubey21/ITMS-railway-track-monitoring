@@ -36,7 +36,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ai_pipeline.detection.video_reader import VideoReader
 from ai_pipeline.detection.track_roi import TrackROIExtractor, TrackROIConfig
+from ai_pipeline.detection.hazard_filter import TrackHazardFilter
 from ai_pipeline.detection.obstacle_detector import ObstacleDetector
+from ai_pipeline.detection.vegetation_detector import VegetationDetector
 from ai_pipeline.detection.vision_pipeline import VisionPipeline
 from ai_pipeline.models.vision_events import VisionResult, DetectionEvent
 
@@ -216,9 +218,10 @@ def main() -> None:
     print(f" Output Directory : {out_dir.resolve()}")
     print("-" * 80)
 
-    # 1. Initialize VisionPipeline with TrackROI and ObstacleDetector
+    # 1. Initialize VisionPipeline with TrackROI, ObstacleDetector, HazardFilter, and VegetationDetector
     roi_config = TrackROIConfig(top_ratio=0.45, bottom_ratio=0.98, left_ratio=0.08, right_ratio=0.92)
     roi_extractor = TrackROIExtractor(config=roi_config)
+    hazard_filter = TrackHazardFilter()
 
     obstacle_detector = ObstacleDetector(
         model_path=args.model,
@@ -227,12 +230,16 @@ def main() -> None:
         imgsz=640,
         device=args.device,
         roi_extractor=roi_extractor,
+        hazard_filter=hazard_filter,
         to_global_coords=True,
     )
+
+    vegetation_detector = VegetationDetector(roi_extractor=roi_extractor, hazard_filter=hazard_filter)
 
     pipeline = VisionPipeline(
         obstacle_detector=obstacle_detector,
         roi_extractor=roi_extractor,
+        vegetation_assessor=vegetation_detector,
     )
 
     # 2. Inspect video and determine sampling indices
