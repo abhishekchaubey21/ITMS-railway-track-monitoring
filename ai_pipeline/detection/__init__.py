@@ -23,6 +23,10 @@ from ai_pipeline.detection.feasibility_analyzer import (
     DetectabilityRating,
     VisibilityLevel,
 )
+from ai_pipeline.detection.obstacle_detector import (
+    ObstacleDetector,
+    ObstacleDetectorConfig,
+)
 
 __all__ = [
     "VideoReader",
@@ -41,4 +45,6 @@ __all__ = [
     "InspectionTargetAssessment",
     "DetectabilityRating",
     "VisibilityLevel",
+    "ObstacleDetector",
+    "ObstacleDetectorConfig",
 ]

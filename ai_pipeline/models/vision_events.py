@@ -69,3 +69,7 @@ class VisionResult(BaseModel):
     detections: List[DetectionEvent] = Field(default_factory=list, description="List of bounding box detections")
     vegetation: Optional[VegetationAssessment] = Field(default=None, description="Vegetation assessment if computed")
     geometry: Optional[GeometryAssessment] = Field(default=None, description="Track geometry assessment if computed")
+
+
+# Alias for DetectionEvent
+VisionDetectionEvent = DetectionEvent
