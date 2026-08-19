@@ -27,6 +27,7 @@ from ai_pipeline.detection.obstacle_detector import (
     ObstacleDetector,
     ObstacleDetectorConfig,
 )
+from ai_pipeline.detection.vision_pipeline import VisionPipeline
 
 __all__ = [
     "VideoReader",
@@ -47,4 +48,5 @@ __all__ = [
     "VisibilityLevel",
     "ObstacleDetector",
     "ObstacleDetectorConfig",
+    "VisionPipeline",
 ]
