@@ -16,6 +16,13 @@ from ai_pipeline.detection.track_roi import (
     TrackROIConfig,
     ROICropMetadata,
 )
+from ai_pipeline.detection.feasibility_analyzer import (
+    FeasibilityAnalyzer,
+    FeasibilityStudySummary,
+    InspectionTargetAssessment,
+    DetectabilityRating,
+    VisibilityLevel,
+)
 
 __all__ = [
     "VideoReader",
@@ -29,4 +36,9 @@ __all__ = [
     "TrackROIExtractor",
     "TrackROIConfig",
     "ROICropMetadata",
+    "FeasibilityAnalyzer",
+    "FeasibilityStudySummary",
+    "InspectionTargetAssessment",
+    "DetectabilityRating",
+    "VisibilityLevel",
 ]
