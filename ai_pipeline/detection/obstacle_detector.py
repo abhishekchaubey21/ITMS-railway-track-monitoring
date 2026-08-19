@@ -9,11 +9,12 @@ certified railway-specific accuracy out-of-the-box without targeted fine-tuning 
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
-import cv2
+from typing import Any, List, Optional
+
 import numpy as np
 
-from ai_pipeline.detection.track_roi import TrackROIExtractor, TrackROIConfig
+from ai_pipeline.detection.hazard_filter import TrackHazardFilter
+from ai_pipeline.detection.track_roi import TrackROIExtractor
 from ai_pipeline.models.vision_events import (
     DetectionEvent,
     SeverityLevel,
@@ -22,9 +23,10 @@ from ai_pipeline.models.vision_events import (
 
 
 def _get_default_device() -> str:
-    """Detects available hardware accelerator (CUDA/CPU)."""
+    """Detect available hardware accelerator (CUDA/CPU)."""
     try:
         import torch
+
         return "cuda" if torch.cuda.is_available() else "cpu"
     except (ImportError, Exception):
         return "cpu"
@@ -33,6 +35,7 @@ def _get_default_device() -> str:
 @dataclass
 class ObstacleDetectorConfig:
     """Configuration options for ObstacleDetector."""
+
     model_path: str = "yolo26n.pt"
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
@@ -56,45 +59,62 @@ class ObstacleDetector:
         model: Optional[Any] = None,
         to_global_coords: bool = True,
         source_name: str = "yolo_obstacle_detector",
+        hazard_filter: Optional[TrackHazardFilter] = None,
     ) -> None:
-        """Initializes the ObstacleDetector.
+        """Initialize the ObstacleDetector.
 
         Args:
-            model_path: Path or identifier for the YOLO model weights (default: yolo26n.pt).
-            confidence_threshold: Minimum confidence score to accept detection (0.0 - 1.0).
-            iou_threshold: NMS IoU threshold (0.0 - 1.0).
+            model_path: Path or identifier for the YOLO model weights.
+            confidence_threshold: Minimum confidence score to accept detection.
+            iou_threshold: NMS IoU threshold.
             imgsz: Inference input dimension.
             device: Inference device ('cuda', 'cpu', or None for auto-detect).
             roi_extractor: Pre-configured TrackROIExtractor instance.
-            model: Optional injected mock/preloaded YOLO model for testing and custom execution.
-            to_global_coords: Whether to map ROI bounding boxes back to full image coordinates.
+            model: Optional injected mock/preloaded YOLO model for testing.
+            to_global_coords: Whether to map ROI boxes to full-frame coordinates.
             source_name: Identifier recorded in DetectionEvent.source.
+            hazard_filter: Optional ego-track hazard filter.
         """
         self.model_path = model_path
-        self.confidence_threshold = max(0.0, min(confidence_threshold, 1.0))
-        self.iou_threshold = max(0.0, min(iou_threshold, 1.0))
+        self.confidence_threshold = max(
+            0.0,
+            min(confidence_threshold, 1.0),
+        )
+        self.iou_threshold = max(
+            0.0,
+            min(iou_threshold, 1.0),
+        )
         self.imgsz = imgsz
-        self.device = device if device is not None else _get_default_device()
+        self.device = (
+            device if device is not None else _get_default_device()
+        )
         self.roi_extractor = roi_extractor or TrackROIExtractor()
         self.model = model
         self.to_global_coords = to_global_coords
         self.source_name = source_name
+        self.hazard_filter = hazard_filter
 
     def _load_model(self) -> Any:
-        """Lazily loads the Ultralytics YOLO model if not injected."""
+        """Lazily load the Ultralytics YOLO model if not injected."""
         if self.model is None:
             try:
                 from ultralytics import YOLO
+
                 self.model = YOLO(self.model_path)
             except ImportError as e:
                 raise ImportError(
-                    "Ultralytics is required for live YOLO inference. Install with 'pip install ultralytics' "
+                    "Ultralytics is required for live YOLO inference. "
+                    "Install with 'pip install ultralytics' "
                     "or inject a mock model for unit testing."
                 ) from e
+
         return self.model
 
     @staticmethod
-    def _map_severity(confidence: float, class_name: str) -> SeverityLevel:
+    def _map_severity(
+        confidence: float,
+        class_name: str,
+    ) -> SeverityLevel:
         """Map detection confidence and object class to severity."""
         name_lower = class_name.lower().strip()
 
@@ -121,39 +141,72 @@ class ObstacleDetector:
 
         return SeverityLevel.LOW
 
+    def filter_hazards(
+        self,
+        detections: List[DetectionEvent],
+        image_width: int,
+        image_height: int,
+    ) -> List[DetectionEvent]:
+        """Filter detections to objects inside the ego-track corridor.
+
+        If no hazard filter is configured, all detections are returned unchanged.
+        """
+        if self.hazard_filter is None:
+            return detections
+
+        return self.hazard_filter.filter_detections(
+            detections,
+            image_width=image_width,
+            image_height=image_height,
+        )
+
     def detect(
         self,
         image: np.ndarray,
         frame_id: int = 0,
         timestamp: float = 0.0,
     ) -> List[DetectionEvent]:
-        """Runs obstacle inference on the track ROI of the supplied image.
+        """Run obstacle inference on the track ROI.
 
         Args:
-            image: Full-frame input BGR image (e.g. 1920x1080).
-            frame_id: Frame index to preserve in detection events.
-            timestamp: Video timestamp in seconds to preserve in detection events.
+            image: Full-frame input BGR image.
+            frame_id: Frame index preserved in detection events.
+            timestamp: Video timestamp in seconds.
 
         Returns:
             List of validated DetectionEvent objects.
         """
         if image is None or image.size == 0:
-            raise ValueError("Invalid or empty image passed to ObstacleDetector.detect()")
+            raise ValueError(
+                "Invalid or empty image passed to ObstacleDetector.detect()"
+            )
 
         if frame_id < 0:
-            raise ValueError(f"frame_id must be non-negative, got {frame_id}")
+            raise ValueError(
+                f"frame_id must be non-negative, got {frame_id}"
+            )
+
         if timestamp < 0.0:
-            raise ValueError(f"timestamp must be non-negative, got {timestamp}")
+            raise ValueError(
+                f"timestamp must be non-negative, got {timestamp}"
+            )
 
         h, w = image.shape[:2]
 
-        # 1. Extract Track Bed ROI
+        # 1. Extract deterministic track-bed ROI.
         roi_crop = self.roi_extractor.crop(image)
-        rh, rw = roi_crop.shape[:2]
-        ymin, ymax, xmin, xmax = self.roi_extractor.get_pixel_bounds(h, w)
 
-        # 2. Run Inference
+        rh, rw = roi_crop.shape[:2]
+        ymin, ymax, xmin, xmax = (
+            self.roi_extractor.get_pixel_bounds(h, w)
+        )
+
+        # Silence unused-bound warning while retaining explicit metadata.
+        _ = ymax
+
+        # 2. Run YOLO inference on ROI only.
         model = self._load_model()
+
         results = model.predict(
             source=roi_crop,
             conf=self.confidence_threshold,
@@ -164,60 +217,129 @@ class ObstacleDetector:
         )
 
         detections: List[DetectionEvent] = []
+
         if not results:
             return detections
 
         first_result = results[0]
         boxes = getattr(first_result, "boxes", None)
+
         if boxes is None or len(boxes) == 0:
             return detections
 
-        # Extract coordinates, confidences, and class indices
+        # Extract coordinates, confidences, and class indices.
         xyxy_data = boxes.xyxy
         conf_data = boxes.conf
         cls_data = boxes.cls
 
-        # Convert tensors / arrays to standard python floats/ints
+        # Convert tensors to NumPy arrays when required.
         if hasattr(xyxy_data, "cpu"):
             xyxy_data = xyxy_data.cpu().numpy()
+
         if hasattr(conf_data, "cpu"):
             conf_data = conf_data.cpu().numpy()
+
         if hasattr(cls_data, "cpu"):
             cls_data = cls_data.cpu().numpy()
 
-        names = getattr(first_result, "names", getattr(model, "names", {}))
+        names = getattr(
+            first_result,
+            "names",
+            getattr(model, "names", {}),
+        )
 
+        # 3. Convert each YOLO detection into a DetectionEvent.
         for i in range(len(xyxy_data)):
             conf = float(conf_data[i])
+
             if conf < self.confidence_threshold:
                 continue
 
             cls_id = int(cls_data[i])
-            class_name = names.get(cls_id, f"class_{cls_id}") if isinstance(names, dict) else str(cls_id)
 
-            bx1, by1, bx2, by2 = [float(v) for v in xyxy_data[i]]
+            if isinstance(names, dict):
+                class_name = names.get(
+                    cls_id,
+                    f"class_{cls_id}",
+                )
+            else:
+                class_name = str(cls_id)
 
-            # Clip box to ROI boundaries
-            bx1 = max(0.0, min(bx1, float(rw)))
-            by1 = max(0.0, min(by1, float(rh)))
-            bx2 = max(bx1, min(bx2, float(rw)))
-            by2 = max(by1, min(by2, float(rh)))
+            bx1, by1, bx2, by2 = [
+                float(v) for v in xyxy_data[i]
+            ]
 
-            # Reject zero-area or invalid boxes
+            # Clip box to ROI boundaries.
+            bx1 = max(
+                0.0,
+                min(bx1, float(rw)),
+            )
+            by1 = max(
+                0.0,
+                min(by1, float(rh)),
+            )
+            bx2 = max(
+                bx1,
+                min(bx2, float(rw)),
+            )
+            by2 = max(
+                by1,
+                min(by2, float(rh)),
+            )
+
+            # Reject zero-area or invalid boxes.
             if (bx2 - bx1) < 1.0 or (by2 - by1) < 1.0:
                 continue
 
-            # Translate to full image coordinate space if requested
+            # Translate ROI coordinates to full-frame coordinates.
             if self.to_global_coords:
-                gx1 = max(0.0, min(bx1 + xmin, float(w)))
-                gy1 = max(0.0, min(by1 + ymin, float(h)))
-                gx2 = max(gx1, min(bx2 + xmin, float(w)))
-                gy2 = max(gy1, min(by2 + ymin, float(h)))
-                final_bbox = [round(gx1, 2), round(gy1, 2), round(gx2, 2), round(gy2, 2)]
-            else:
-                final_bbox = [round(bx1, 2), round(by1, 2), round(bx2, 2), round(by2, 2)]
+                gx1 = max(
+                    0.0,
+                    min(
+                        bx1 + xmin,
+                        float(w),
+                    ),
+                )
+                gy1 = max(
+                    0.0,
+                    min(
+                        by1 + ymin,
+                        float(h),
+                    ),
+                )
+                gx2 = max(
+                    gx1,
+                    min(
+                        bx2 + xmin,
+                        float(w),
+                    ),
+                )
+                gy2 = max(
+                    gy1,
+                    min(
+                        by2 + ymin,
+                        float(h),
+                    ),
+                )
 
-            severity = self._map_severity(conf, class_name)
+                final_bbox = [
+                    round(gx1, 2),
+                    round(gy1, 2),
+                    round(gx2, 2),
+                    round(gy2, 2),
+                ]
+            else:
+                final_bbox = [
+                    round(bx1, 2),
+                    round(by1, 2),
+                    round(bx2, 2),
+                    round(by2, 2),
+                ]
+
+            severity = self._map_severity(
+                conf,
+                class_name,
+            )
 
             event = DetectionEvent(
                 frame_id=frame_id,
@@ -228,6 +350,12 @@ class ObstacleDetector:
                 severity=severity,
                 source=self.source_name,
             )
+
             detections.append(event)
 
-        return detections
+        # 4. Apply optional ego-track hazard filtering.
+        return self.filter_hazards(
+            detections,
+            image_width=w,
+            image_height=h,
+        )
