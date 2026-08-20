@@ -36,6 +36,7 @@ from ai_pipeline.detection.vegetation_detector import (
     VegetationDetector,
     VegetationDetectorConfig,
     VegetationAnalysisDetails,
+    EgoRunningGaugeConfig,
 )
 from ai_pipeline.detection.vision_pipeline import VisionPipeline
 from ai_pipeline.detection.video_processor import (
@@ -69,6 +70,7 @@ __all__ = [
     "VegetationDetector",
     "VegetationDetectorConfig",
     "VegetationAnalysisDetails",
+    "EgoRunningGaugeConfig",
     "VisionPipeline",
     "VideoProcessor",
     "VideoProcessingSummary",

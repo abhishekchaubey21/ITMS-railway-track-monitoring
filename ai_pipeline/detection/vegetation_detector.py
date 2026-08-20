@@ -18,6 +18,45 @@ from ai_pipeline.detection.track_roi import TrackROIExtractor
 from ai_pipeline.models.vision_events import VegetationAssessment
 
 
+@dataclass(frozen=True)
+class EgoRunningGaugeConfig:
+    """Perspective geometry representing the inner running gauge between the two ego rails."""
+
+    vanishing_x_ratio: float = 0.50          # Center line of ego track (default: 0.50 = 960px on 1920w)
+    top_y_ratio: float = 0.50                 # Top vertical extent of near-field gauge (default: 0.50 = 540px on 1080h)
+    top_half_gauge_ratio: float = 0.022       # Half-width at top_y (~42px on 1920w)
+    bottom_y_ratio: float = 0.95              # Bottom vertical extent of gauge (~1026px on 1080h)
+    bottom_half_gauge_ratio: float = 0.135    # Half-width at bottom_y (~259px on 1920w)
+    safety_margin_ratio: float = 0.10         # Inset safety margin inside the rail heads (default: 10% inset)
+
+    def get_inner_gauge_bounds_at_y(
+        self,
+        y: float,
+        image_width: int,
+        image_height: int,
+    ) -> Tuple[float, float]:
+        """Calculates the (left_x, right_x) pixel boundaries of the inner running gauge at coordinate y."""
+        if image_width <= 0 or image_height <= 0:
+            raise ValueError("image dimensions must be positive")
+
+        top_y = self.top_y_ratio * image_height
+        bottom_y = self.bottom_y_ratio * image_height
+
+        if bottom_y <= top_y:
+            raise ValueError("bottom_y_ratio must be greater than top_y_ratio")
+
+        t = (y - top_y) / (bottom_y - top_y)
+        t = max(0.0, min(1.0, t))
+
+        top_hw = self.top_half_gauge_ratio * image_width
+        bottom_hw = self.bottom_half_gauge_ratio * image_width
+        half_width = top_hw + t * (bottom_hw - top_hw)
+
+        inner_hw = max(0.0, half_width * (1.0 - self.safety_margin_ratio))
+        center_x = self.vanishing_x_ratio * image_width
+        return (center_x - inner_hw, center_x + inner_hw)
+
+
 @dataclass
 class VegetationDetectorConfig:
     """Configuration options for vegetation detection."""
@@ -31,7 +70,9 @@ class VegetationDetectorConfig:
     min_contour_area: int = 30
     score_multiplier: float = 5.0
     intrusion_density_threshold: float = 0.02
+    min_intrusion_pixel_count: int = 50
     center_corridor_ratio: Tuple[float, float] = (0.32, 0.68)
+    gauge_config: Optional[EgoRunningGaugeConfig] = None
 
 
 @dataclass
@@ -57,17 +98,20 @@ class VegetationDetector:
         config: Optional[VegetationDetectorConfig] = None,
         roi_extractor: Optional[TrackROIExtractor] = None,
         hazard_filter: Optional[TrackHazardFilter] = None,
+        gauge_config: Optional[EgoRunningGaugeConfig] = None,
     ) -> None:
         """Initialize the VegetationDetector.
 
         Args:
             config: Detection thresholds and morphological parameters.
             roi_extractor: Pre-configured TrackROIExtractor instance.
-            hazard_filter: Optional TrackHazardFilter to establish ego-track perspective corridor.
+            hazard_filter: Optional TrackHazardFilter for backward compatibility.
+            gauge_config: Optional EgoRunningGaugeConfig specifying the running rail inner gauge.
         """
         self.config = config or VegetationDetectorConfig()
         self.roi_extractor = roi_extractor or TrackROIExtractor()
-        self.hazard_filter = hazard_filter or TrackHazardFilter()
+        self.hazard_filter = hazard_filter
+        self.gauge_config = gauge_config or self.config.gauge_config or EgoRunningGaugeConfig()
 
     def _compute_exg_mask(self, bgr_image: np.ndarray) -> np.ndarray:
         """Compute binary mask where Excess Green index indicates vegetation."""
@@ -124,39 +168,47 @@ class VegetationDetector:
 
         return closed
 
+    def _build_ego_gauge_mask(
+        self,
+        roi_shape: Tuple[int, int],
+        image_shape: Tuple[int, int],
+        roi_bounds: Tuple[int, int, int, int],
+    ) -> np.ndarray:
+        """Constructs a binary mask representing the inner running gauge within the ROI crop."""
+        rh, rw = roi_shape
+        h, w = image_shape
+        ymin, ymax, xmin, xmax = roi_bounds
+
+        gauge_mask = np.zeros((rh, rw), dtype=np.uint8)
+
+        # Clamp vertical gauge limits to the ROI bounds
+        gauge_top_y = max(ymin, min(int(round(self.gauge_config.top_y_ratio * h)), ymax))
+        gauge_bot_y = max(ymin, min(int(round(self.gauge_config.bottom_y_ratio * h)), ymax))
+
+        if gauge_bot_y <= gauge_top_y:
+            return gauge_mask
+
+        top_left_x, top_right_x = self.gauge_config.get_inner_gauge_bounds_at_y(gauge_top_y, w, h)
+        bot_left_x, bot_right_x = self.gauge_config.get_inner_gauge_bounds_at_y(gauge_bot_y, w, h)
+
+        pts = np.array([
+            [int(round(top_left_x - xmin)), int(round(gauge_top_y - ymin))],
+            [int(round(top_right_x - xmin)), int(round(gauge_top_y - ymin))],
+            [int(round(bot_right_x - xmin)), int(round(gauge_bot_y - ymin))],
+            [int(round(bot_left_x - xmin)), int(round(gauge_bot_y - ymin))],
+        ], dtype=np.int32)
+
+        cv2.fillPoly(gauge_mask, [pts], 255)
+        return gauge_mask
+
     def _build_ego_corridor_mask(
         self,
         roi_shape: Tuple[int, int],
         image_shape: Tuple[int, int],
         roi_bounds: Tuple[int, int, int, int],
     ) -> np.ndarray:
-        """Constructs a binary mask representing the ego-track corridor within the ROI crop."""
-        rh, rw = roi_shape
-        h, w = image_shape
-        ymin, ymax, xmin, xmax = roi_bounds
-
-        corridor_mask = np.zeros((rh, rw), dtype=np.uint8)
-
-        if self.hazard_filter is not None:
-            # Generate trapezoidal perspective polygon in ROI coordinate space
-            top_left_x, top_right_x = self.hazard_filter.get_corridor_bounds_at_y(ymin, w, h)
-            bot_left_x, bot_right_x = self.hazard_filter.get_corridor_bounds_at_y(ymax, w, h)
-
-            pts = np.array([
-                [int(round(top_left_x - xmin)), 0],
-                [int(round(top_right_x - xmin)), 0],
-                [int(round(bot_right_x - xmin)), rh],
-                [int(round(bot_left_x - xmin)), rh],
-            ], dtype=np.int32)
-
-            cv2.fillPoly(corridor_mask, [pts], 255)
-        else:
-            # Fallback to configured center ratio
-            cx_min = int(rw * self.config.center_corridor_ratio[0])
-            cx_max = int(rw * self.config.center_corridor_ratio[1])
-            corridor_mask[:, cx_min:cx_max] = 255
-
-        return corridor_mask
+        """Alias for _build_ego_gauge_mask for backward compatibility."""
+        return self._build_ego_gauge_mask(roi_shape, image_shape, roi_bounds)
 
     def analyze(
         self,
@@ -220,29 +272,32 @@ class VegetationDetector:
         # 3. Morphological filtering
         clean_mask = self._apply_morphology(combined_mask)
 
-        # 4. Compute overall vegetation density & score across track bed
+        # 4. Compute overall vegetation density & score across track bed ROI
         veg_pixels = int(np.count_nonzero(clean_mask))
         raw_density = veg_pixels / float(roi_pixels)
         scaled_score = min(1.0, max(0.0, raw_density * self.config.score_multiplier))
 
-        # 5. Compute ego-track corridor encroachment
-        ego_corridor_mask = self._build_ego_corridor_mask(
+        # 5. Compute ego-track running gauge encroachment
+        ego_gauge_mask = self._build_ego_gauge_mask(
             roi_shape=(rh, rw),
             image_shape=(h, w),
             roi_bounds=(ymin, ymax, xmin, xmax),
         )
 
-        ego_veg_mask = cv2.bitwise_and(clean_mask, ego_corridor_mask)
+        ego_veg_mask = cv2.bitwise_and(clean_mask, ego_gauge_mask)
         center_veg_pixels = int(np.count_nonzero(ego_veg_mask))
-        center_roi_pixels = int(np.count_nonzero(ego_corridor_mask))
+        center_roi_pixels = int(np.count_nonzero(ego_gauge_mask))
 
         if center_roi_pixels > 0:
             center_density = center_veg_pixels / float(center_roi_pixels)
         else:
             center_density = 0.0
 
-        # Intrusion is triggered strictly if vegetation encroaches into the active ego-track corridor
-        intrusion_detected = center_density >= self.config.intrusion_density_threshold
+        # Intrusion is triggered strictly if genuine vegetation encroaches into the active inner running gauge
+        intrusion_detected = (
+            center_density >= self.config.intrusion_density_threshold
+            and center_veg_pixels >= self.config.min_intrusion_pixel_count
+        )
 
         return VegetationAnalysisDetails(
             score=round(scaled_score, 4),

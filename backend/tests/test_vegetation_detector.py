@@ -9,6 +9,7 @@ from ai_pipeline.detection.vegetation_detector import (
     VegetationDetector,
     VegetationDetectorConfig,
     VegetationAnalysisDetails,
+    EgoRunningGaugeConfig,
 )
 from ai_pipeline.detection.vision_pipeline import VisionPipeline
 from ai_pipeline.models.vision_events import VegetationAssessment, VisionResult
@@ -19,8 +20,10 @@ def test_vegetation_detector_initialization():
     detector = VegetationDetector()
     assert isinstance(detector.config, VegetationDetectorConfig)
     assert isinstance(detector.roi_extractor, TrackROIExtractor)
+    assert isinstance(detector.gauge_config, EgoRunningGaugeConfig)
     assert detector.config.exg_threshold == 15.0
     assert detector.config.min_contour_area == 30
+    assert detector.gauge_config.safety_margin_ratio == 0.10
 
 
 def test_vegetation_detector_invalid_inputs():
@@ -82,9 +85,9 @@ def test_obvious_vegetation_detection():
     # Create base dark grey image (ballast)
     img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
 
-    # Place a prominent green vegetation patch inside track ROI (Y: 600-800, X: 800-1100)
+    # Place a prominent green vegetation patch inside track ROI & running gauge (Y: 700-850, X: 900-1020)
     # Bright green BGR: B=30, G=180, R=40
-    img[600:800, 800:1100] = [30, 180, 40]
+    img[700:850, 900:1020] = [30, 180, 40]
 
     details: VegetationAnalysisDetails = detector.analyze(img, frame_id=1, timestamp=0.5)
 
@@ -104,7 +107,7 @@ def test_threshold_behavior_and_sensitivity():
     """Verify that adjusting exg_threshold or min_saturation changes detector sensitivity."""
     # Subtle pale green patch
     img = np.full((1080, 1920, 3), fill_value=100, dtype=np.uint8)
-    img[600:750, 800:1000] = [70, 120, 75]  # Mild excess green (ExG = 240 - 75 - 70 = 95)
+    img[600:750, 850:1050] = [70, 120, 75]  # Mild excess green
 
     # Standard detector
     det_standard = VegetationDetector(config=VegetationDetectorConfig(exg_threshold=15.0))
@@ -153,46 +156,122 @@ def test_roi_restriction_behavior():
 
     # Now add green patch inside track ROI (Y: 600-750)
     track_green_img = sky_green_img.copy()
-    track_green_img[600:750, 800:1000] = [20, 200, 20]
+    track_green_img[600:750, 850:1050] = [20, 200, 20]
 
     assessment_track = detector.assess(track_green_img)
     assert assessment_track.score > 0.0
 
 
-def test_vegetation_beside_adjacent_track_is_not_ego_intrusion():
-    """Vegetation on side embankment or adjacent track produces score but NOT ego-track intrusion."""
+def test_vegetation_beside_right_ego_rail_is_not_intrusion():
+    """Vegetation on the right-side fence/embankment/shoulder must yield score > 0 but intrusion = False."""
     detector = VegetationDetector()
-
     img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
 
-    # Place green vegetation patch exclusively on far-left side embankment / adjacent track (X: 180-320, Y: 600-800)
-    # This is inside ROI (X: 154-1766, Y: 486-1058), but OUTSIDE the ego corridor (X: ~600-1320 at Y: 600-800)
-    img[600:800, 180:320] = [30, 180, 40]
+    # Place vegetation patch on right side beside right rail (X: 1220-1450, Y: 700-850)
+    img[700:850, 1220:1450] = [30, 180, 40]
 
     details = detector.analyze(img)
-    assert details.score > 0.0  # Overall vegetation score is captured
-    assert details.intrusion_detected is False  # But NOT on the train's own running rails
+    assert details.score > 0.0  # Captured in general vegetation score
+    assert details.intrusion_detected is False  # Outside the ego running gauge
 
 
-def test_vegetation_genuinely_inside_ego_track_corridor_is_intrusion():
-    """Vegetation growing directly inside the ego-track corridor flags an intrusion."""
+def test_vegetation_beside_left_ego_rail_is_not_intrusion():
+    """Vegetation on the left-side cess/embankment must yield score > 0 but intrusion = False."""
     detector = VegetationDetector()
-
     img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
 
-    # Place green vegetation patch directly inside ego track running gauge (X: 900-1020, Y: 700-850)
+    # Place vegetation patch on left side beside left rail (X: 520-720, Y: 700-850)
+    img[700:850, 520:720] = [30, 180, 40]
+
+    details = detector.analyze(img)
+    assert details.score > 0.0  # Captured in general vegetation score
+    assert details.intrusion_detected is False  # Outside the ego running gauge
+
+
+def test_vegetation_on_adjacent_track_is_not_intrusion():
+    """Vegetation on far-left/right adjacent parallel tracks must yield score > 0 but intrusion = False."""
+    detector = VegetationDetector()
+    img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+
+    # Place vegetation patch on far-left adjacent track (X: 180-350, Y: 600-800)
+    img[600:800, 180:350] = [30, 180, 40]
+
+    details = detector.analyze(img)
+    assert details.score > 0.0
+    assert details.intrusion_detected is False
+
+
+def test_vegetation_between_two_ego_rails_is_intrusion():
+    """Vegetation growing directly between the two ego running rails triggers intrusion = True."""
+    detector = VegetationDetector()
+    img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+
+    # Place vegetation patch strictly inside running gauge (X: 900-1020, Y: 700-850)
     img[700:850, 900:1020] = [30, 180, 40]
 
     details = detector.analyze(img)
     assert details.score > 0.0
     assert details.intrusion_detected is True
+    assert details.center_vegetation_pixel_count > 0
+
+
+def test_vegetation_crossing_into_gauge_is_intrusion():
+    """Vegetation originating outside but overhanging/crossing into the running gauge triggers intrusion = True."""
+    detector = VegetationDetector()
+    img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+
+    # Place vegetation patch spanning across right rail into the center gauge (X: 880-1350, Y: 700-850)
+    img[700:850, 880:1350] = [30, 180, 40]
+
+    details = detector.analyze(img)
+    assert details.score > 0.0
+    assert details.intrusion_detected is True
+    assert details.center_vegetation_pixel_count > 0
+
+
+def test_general_vegetation_score_increases_for_vegetation_outside_gauge():
+    """Vegetation density/score increases when trackside vegetation is present without triggering intrusion."""
+    detector = VegetationDetector()
+
+    # Base image: no vegetation
+    base_img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
+    det_base = detector.analyze(base_img)
+    assert det_base.score == 0.0
+    assert det_base.intrusion_detected is False
+
+    # Image 1: Right-side trackside vegetation
+    img_right = base_img.copy()
+    img_right[700:850, 1250:1450] = [30, 180, 40]
+    det_right = detector.analyze(img_right)
+    assert det_right.score > 0.0
+    assert det_right.intrusion_detected is False
+
+    # Image 2: Add left-side embankment vegetation as well
+    img_both = img_right.copy()
+    img_both[600:750, 200:400] = [30, 180, 40]
+    det_both = detector.analyze(img_both)
+    assert det_both.score > det_right.score  # General score increases with more trackside vegetation
+    assert det_both.intrusion_detected is False  # Still no ego-track gauge intrusion
+
+
+def test_configurable_safety_margin_behavior():
+    """Verify that increasing safety_margin_ratio shrinks the inner gauge corridor."""
+    gauge_std = EgoRunningGaugeConfig(safety_margin_ratio=0.10)
+    gauge_strict = EgoRunningGaugeConfig(safety_margin_ratio=0.25)
+
+    l_std, r_std = gauge_std.get_inner_gauge_bounds_at_y(800, 1920, 1080)
+    l_str, r_str = gauge_strict.get_inner_gauge_bounds_at_y(800, 1920, 1080)
+
+    width_std = r_std - l_std
+    width_strict = r_str - l_str
+    assert width_strict < width_std
 
 
 def test_detector_interfaces_and_polymorphism():
     """Verify analyze(), assess(), detect(), and __call__() all return consistent outputs."""
     detector = VegetationDetector()
     img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
-    img[600:800, 800:1100] = [30, 190, 30]
+    img[700:850, 900:1020] = [30, 190, 30]
 
     res_assess = detector.assess(img, frame_id=5, timestamp=1.5)
     res_detect = detector.detect(img, frame_id=5, timestamp=1.5)
@@ -218,7 +297,7 @@ def test_integration_with_vision_pipeline():
 
     # Frame with green vegetation in track corridor
     img = np.full((1080, 1920, 3), fill_value=80, dtype=np.uint8)
-    img[600:800, 800:1100] = [30, 180, 40]
+    img[700:850, 900:1020] = [30, 180, 40]
 
     result: VisionResult = pipeline.process_frame(img, frame_id=12, timestamp=2.0)
 
